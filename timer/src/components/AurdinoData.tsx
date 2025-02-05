@@ -1,56 +1,150 @@
-import React, { useEffect, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
+import React, { useState, useEffect } from "react";
+import { Howl } from "howler";
+import "./aurdino.css";
 
 interface ArduinoData {
-  voltage: number;
-  resistance: number;
   force: number;
 }
 
 const App: React.FC = () => {
-  const [data, setData] = useState<ArduinoData>({ voltage: 0, resistance: 0, force: 0 });
-  const [isReset, setIsReset] = useState(false);
+  const [forceValue, setForceValue] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [forceAnimation, setForceAnimation] = useState<number>(0);
+  const [isFirstDataReceived, setIsFirstDataReceived] = useState<boolean>(false);
+
+  // Define the sound files for different force ranges
+  const soundLow = new Howl({
+    src: ["sound_low.mp3"],
+    volume: 0.5,
+    loop: false,
+  });
+
+  const soundMedium = new Howl({
+    src: ["sound_medium.mp3"],
+    volume: 0.5,
+    loop: false,
+  });
+
+  const soundHigh = new Howl({
+    src: ["sound_high.mp3"],
+    volume: 0.5,
+    loop: false,
+  });
+
+  const soundMax = new Howl({
+    src: ["sound_max.mp3"],
+    volume: 0.5,
+    loop: false,
+  });
+
+  // Handle force feedback sound based on score range
+  const handleForceFeedback = (force: number) => {
+    if (force < 400) {
+      soundLow.play();
+    } else if (force < 600) {
+      soundMedium.play();
+    } else if (force < 800) {
+      soundHigh.play();
+    } else {
+      soundMax.play();
+    }
+  };
+
+  const animateForce = (target: number) => {
+    let start = forceAnimation;
+    let diff = target - start;
+    let duration = 2000; // 2 seconds slow increment
+    let startTime: number | null = null;
+
+    const animate = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const progress = timestamp - startTime;
+
+      const progressPercentage = Math.min(progress / duration, 1);
+      setForceAnimation(start + diff * progressPercentage);
+
+      // Increment the force value
+      setForceValue(Math.round(start + diff * progressPercentage));
+
+      if (progress < duration) {
+        requestAnimationFrame(animate);
+      }
+    };
+
+    requestAnimationFrame(animate);
+  };
+
+  const handleCalculateScore = async () => {
+    try {
+      const response = await fetch("http://localhost:8000/data");
+      const data: ArduinoData = await response.json();
+      console.log("📡 Force data received:", data);
+
+      const targetForce = Math.round(data.force * 100); // scale to 600
+
+      if (forceValue !== null && Math.abs(targetForce - forceValue) > 10) {
+        setForceValue(targetForce);
+        animateForce(targetForce);
+        handleForceFeedback(targetForce);
+      }
+    } catch (error) {
+      setError("Error fetching data.");
+      console.error("Error fetching data:", error);
+    }
+  };
+
+  const handleReset = async () => {
+    try {
+      const response = await fetch("http://localhost:8000/reset", {
+        method: "POST",
+      });
+      const data = await response.json();
+      if (data.status === "success") {
+        setForceValue(0);
+        setForceAnimation(0);
+        soundLow.stop();
+        soundMedium.stop();
+        soundHigh.stop();
+        soundMax.stop();
+        setIsFirstDataReceived(false);
+      }
+    } catch (error) {
+      setError("Error resetting data.");
+      console.error("Error resetting data:", error);
+    }
+  };
 
   useEffect(() => {
-    const socket: Socket = io('http://localhost:6000/', {
-      transports: ['websocket'],
-    });
-
-    // Check if the socket is connected
-    socket.on('connect', () => {
-      console.log('Socket connected to server');
-    });
-
-    // Listen for new data from the server
-    socket.on('new_data', (newData: ArduinoData) => {
-      console.log('New data received:', newData);
-      setData(newData);
-      setIsReset(false); // Reset the reset flag when new data is received
-    });
-
-    // Listen for reset events
-    socket.on('reset_data', () => {
-      console.log('Data reset received');
-      setData({ voltage: 0, resistance: 0, force: 0 });
-      setIsReset(true); // Set reset flag when data is reset
-    });
-
-    // Cleanup function to disconnect the socket when component unmounts
-    return () => {
-      socket.disconnect();
-      console.log('Socket disconnected from server');
-    };
+    // Initial setup or any additional side effects can be done here.
   }, []);
 
   return (
-    <div style={{ fontFamily: 'Arial, sans-serif', padding: '20px', background: '#f0f0f0', color: '#333' }}>
-      <h1>Arduino Data Monitor</h1>
-      <div style={{ marginBottom: '20px' }}>
-        <p><strong>Voltage:</strong> {data.voltage.toFixed(2)} V</p>
-        <p><strong>Resistance:</strong> {data.resistance.toFixed(2)} Ω</p>
-        <p><strong>Force:</strong> {data.force > 0 ? data.force.toFixed(2) : 'No hit detected'} N</p>
+    <div className="app-container">
+      <h1 className="title">Boxing punching machine</h1>
+      {error && <p className="error">{error}</p>}
+
+      <div className="force-container">
+        <p className="force-text">
+          Force: {forceValue !== null ? forceValue : "Waiting for data..."}
+        </p>
+
+        <div className="progress-bar-container">
+          <div
+            className="progress-bar"
+            style={{
+              width: `${forceAnimation}%`,
+              transition: "width 0.1s ease-out",
+            }}  
+          />
+        </div>
       </div>
-      {isReset && <p style={{ color: 'red' }}>Data has been reset. Awaiting updates...</p>}
+
+      <button className="calculate-btn" onClick={handleCalculateScore} disabled={isFirstDataReceived}>
+        Calculate My Score
+      </button>
+      <button className="reset-btn" onClick={handleReset}>
+        Reset
+      </button>
     </div>
   );
 };
